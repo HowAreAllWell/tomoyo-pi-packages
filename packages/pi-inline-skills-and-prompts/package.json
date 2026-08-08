@@ -1,0 +1,24 @@
+{
+  "name": "pi-inline-skills-and-prompts",
+  "version": "0.1.0",
+  "description": "Inline $skills and $prompts autocompletion in pi: type $ inside a message to fuzzy-complete and insert a skill/prompt command without leaving the current line.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "skills",
+    "prompts",
+    "autocomplete"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "extensions/inline-skills-and-prompts.ts",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}

@@ -13,6 +13,7 @@
 | 包 | 说明 | 安装 |
 |---|---|---|
 | [pi-mandatory-skill-resolution](packages/pi-mandatory-skill-resolution/) | 强制模型先评估并加载 skill，再允许使用其他工具（修复小模型跳过 skill 加载） | `pi install npm:pi-mandatory-skill-resolution` |
+| [pi-inline-skills-and-prompts](packages/pi-inline-skills-and-prompts/) | 消息正文内联 `$` 补全并插入 skill / prompt 命令，不用切到 `/` 命令模式 | `pi install npm:pi-inline-skills-and-prompts` |
 
 ## 开发
 
