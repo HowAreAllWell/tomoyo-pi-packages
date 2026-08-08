@@ -1,0 +1,10 @@
+{
+  "name": "tomoyo-pi-packages",
+  "version": "0.1.0",
+  "description": "个人维护的 pi 工具 monorepo：收录可独立发布的 extensions / skills / prompts / themes。",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "private": true
+}
