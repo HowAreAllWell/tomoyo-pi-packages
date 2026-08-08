@@ -1,8 +1,13 @@
 {
   "name": "pi-mandatory-skill-resolution",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Force the model to assess and load skills before any other tool — fixes small/fast models silently skipping skill loading.",
-  "keywords": ["pi-package", "pi-extension", "skills", "agent"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "skills",
+    "agent"
+  ],
   "license": "MIT",
   "type": "module",
   "main": "extensions/mandatory-skill-resolution.ts",
@@ -11,6 +16,8 @@
     "typebox": "*"
   },
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": [
+      "./extensions"
+    ]
   }
 }

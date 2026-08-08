@@ -2,6 +2,8 @@
 
 强制模型在调用任何其他工具之前评估并加载 skill 的 pi 扩展。
 
+> **English summary** — A pi extension that forces the model to assess and load skills before using any other tool. It fixes small/fast models (e.g. deepseek-v4-flash) silently skipping the progressive-disclosure step where the model must `read` a SKILL.md on its own. It registers a `resolve_skill(skillName | "none")` tool and gates every other tool call behind it: until `resolve_skill` has been called for the current turn, all other tools (read, bash, edit, write, subagent, ...) are blocked with a clear error. On a match, the full SKILL.md is returned inline, so the model cannot "forget" to load it. Judgment stays with the model (semantic), enforcement stays with the harness. Install: `pi install npm:pi-mandatory-skill-resolution`.
+
 ## 为什么需要它
 
 pi 的 skill 使用**渐进式披露**：system prompt 里只列出 skill 的 name/description/location，完整 SKILL.md 需要模型主动调用 `read` 去读。小模型/快速模型（如 deepseek-v4-flash）经常跳过这一步——从不主动加载 skill，导致 skill 形同虚设。
