@@ -1,46 +1,35 @@
 # pi-mandatory-skill-resolution
 
-强制模型在调用任何其他工具之前评估并加载 skill 的 pi 扩展。
+A pi extension that forces the model to assess and load skills **before** using any other tool.
 
-> **English summary** — A pi extension that forces the model to assess and load skills before using any other tool. It fixes small/fast models (e.g. deepseek-v4-flash) silently skipping the progressive-disclosure step where the model must `read` a SKILL.md on its own. It registers a `resolve_skill(skillName | "none")` tool and gates every other tool call behind it: until `resolve_skill` has been called for the current turn, all other tools (read, bash, edit, write, subagent, ...) are blocked with a clear error. On a match, the full SKILL.md is returned inline, so the model cannot "forget" to load it. Judgment stays with the model (semantic), enforcement stays with the harness. Install: `pi install npm:pi-mandatory-skill-resolution`.
+## Why
 
-## 为什么需要它
+Pi's skills use **progressive disclosure**: the system prompt only lists each skill's name/description/location, and the model is expected to call `read` on the SKILL.md itself. Small/fast models (e.g. deepseek-v4-flash) frequently skip that step — they never load the skill, so skills end up unused.
 
-pi 的 skill 使用**渐进式披露**：system prompt 里只列出 skill 的 name/description/location，完整 SKILL.md 需要模型主动调用 `read` 去读。小模型/快速模型（如 deepseek-v4-flash）经常跳过这一步——从不主动加载 skill，导致 skill 形同虚设。
+## How it works
 
-## 原理
+Judgment stays with the model (semantic understanding); enforcement stays with the harness (cannot be skipped).
 
-判断权交给模型，强制权交给 harness：
+1. Registers a custom tool `resolve_skill(skillName | "none")`.
+2. A `tool_call` gate blocks **every other tool** (read, bash, edit, write, subagent, web_search, ...) until `resolve_skill` has been called this turn. Blocked calls come back as tool errors, so the model is forced to comply.
+3. On a match, `resolve_skill` returns the full SKILL.md inline — the model cannot "forget" to load it.
+4. Each turn, `before_agent_start` resets the gate and injects the skill list (`name — description`) into the conversation.
 
-1. 注册自定义工具 `resolve_skill(skillName | "none")`。
-2. `tool_call` 门控：模型调用**除 `resolve_skill` 外任何工具**前，必须先调用 `resolve_skill`；否则调用被 block 并返回明确错误。
-3. 匹配时 `resolve_skill` 直接返回完整 SKILL.md（模型无法"忘记"加载）；传 `"none"` 则正常继续。
-4. 每轮 `before_agent_start` 重置门控 + 注入带描述的技能列表。
-
-## 安装
+## Install
 
 ```bash
-# 本地路径
-pi install /path/to/tomoyo-pi-packages/packages/pi-mandatory-skill-resolution
-
-# npm（发布后）
 pi install npm:pi-mandatory-skill-resolution
-
-# git（发布后）
-pi install git:github.com/tomoyo/tomoyo-pi-packages
 ```
 
-## 行为
+## Behavior
 
-- 每轮新请求，模型必须先调 `resolve_skill` 做一次技能评估（语义判断，非关键词匹配）。
-- 每轮注入的技能列表：`name — description`，只含**可被模型调用**的 skill（过滤 `disable-model-invocation`）。
-- 被禁用的 skill 只能通过 `/skill:name` 显式调用，不参与强制评估。
-- 无 skill 可用时（如 `--no-skills`）门控自动关闭。
+- Every new request requires a `resolve_skill` call first (semantic judgment, not keyword matching).
+- The injected skill list only includes skills the model is allowed to invoke: skills marked `disable-model-invocation: true` are filtered out (matching pi's own `formatSkillsForPrompt` filter) and remain usable only via `/skill:name`.
+- When no skills are available (e.g. `--no-skills`), the gate is disabled automatically.
 
-## 开发
+## Development
 
 ```bash
-# 类型检查
 npx tsc --noEmit --strict --esModuleInterop --skipLibCheck \
   --module nodenext --moduleResolution nodenext --target es2022 \
   extensions/mandatory-skill-resolution.ts
@@ -49,3 +38,18 @@ npx tsc --noEmit --strict --esModuleInterop --skipLibCheck \
 ## License
 
 MIT
+
+---
+
+## 中文说明
+
+**这是什么**：一个 pi 扩展，强制模型在调用任何其他工具之前评估并加载 skill。解决小/快速模型（如 deepseek-v4-flash）跳过 skill 加载的问题——pi 的 skill 采用渐进式披露，完整 SKILL.md 需要模型主动 `read`，而小模型常常直接跳过，导致 skill 形同虚设。
+
+**工作原理**：判断权交给模型（语义判断），强制权交给 harness（无法跳过）。注册 `resolve_skill(skillName | "none")` 工具，并用 `tool_call` 门控拦截其他所有工具——本轮未调用 `resolve_skill` 前，read/bash/edit/write/subagent 等一律被 block 并返回明确错误；匹配时直接返回完整 SKILL.md，模型无法"忘记"加载。
+
+**安装**：`pi install npm:pi-mandatory-skill-resolution`
+
+**细节**：
+- 每轮新请求都要求先调 `resolve_skill` 做技能评估。
+- 技能列表只含模型可自动调用的技能（`disable-model-invocation: true` 的被过滤，只能通过 `/skill:name` 显式调用）。
+- 无 skill 可用时（如 `--no-skills`）门控自动关闭。
