@@ -12,7 +12,8 @@
 
 | 包 | 说明 | 安装 |
 |---|---|---|
-| [pi-mandatory-skill-resolution](packages/pi-mandatory-skill-resolution/) | 强制模型先评估并加载 skill，再允许使用其他工具（修复小模型跳过 skill 加载） | `pi install npm:pi-mandatory-skill-resolution` |
+| ~~[pi-mandatory-skill-resolution](packages/pi-mandatory-skill-resolution/)~~ | 已被 pi-task-orientation 取代（旧版单技能评估，无 AGENTS.md 规则分析） | — |
+| [pi-task-orientation](packages/pi-task-orientation/) | 每轮任务开始前两步定向：强制技能评估（多选/理由）+ 逐条分析 AGENTS.md 规则（跳过项+原因传回工具参数）。取代 pi-mandatory-skill-resolution | `pi install npm:pi-task-orientation` |
 | [pi-inline-skills-and-prompts](packages/pi-inline-skills-and-prompts/) | 消息正文内联 `$` 补全并插入 skill / prompt 命令，不用切到 `/` 命令模式 | `pi install npm:pi-inline-skills-and-prompts` |
 
 ## 开发
@@ -25,7 +26,7 @@ npx tsc --noEmit --strict --esModuleInterop --skipLibCheck \
   extensions/mandatory-skill-resolution.ts
 
 # 本地安装验证
-pi install ./packages/pi-mandatory-skill-resolution
+pi install ./packages/pi-task-orientation
 ```
 
 ## 发布
