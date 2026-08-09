@@ -1,6 +1,6 @@
 {
   "name": "pi-task-orientation",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Every request begins with a two-step orientation: (1) the model must assess available skills and load matching ones (or justify \"none\"), (2) it must check every AGENTS.md rule, apply always-applicable ones, and report skipped conditional rules with reasons. Replaces pi-mandatory-skill-resolution.",
   "keywords": [
     "pi-package",
