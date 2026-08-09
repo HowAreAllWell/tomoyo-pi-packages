@@ -1,44 +1,53 @@
 # tomoyo-pi-packages
 
-个人维护的 pi 工具 monorepo。只收录**可独立发布**的 pi 资源：extensions / skills / prompts / themes。每个工具一个子包，位于 `packages/` 下。
+> Pi extensions that make coding agents actually follow the rules.
 
-## 收录原则
+一套让 pi（coding agent）真正「守规矩」的扩展集。不做花哨功能，专治 agent 最头疼的两个顽疾：**技能被跳过**、**项目规则被忽视**。
 
-- 只收可独立安装、独立发布的工具（有明确边界、可测试、别人能直接用）。
-- 调研笔记、踩坑记录、过程性内容**不收**进本仓库（放个人笔记/博客）。
-- 每个子包必须：可 `pi install`、有 README（用途/原理/安装/行为）、有 LICENSE、通过类型检查。
+## ✨ 亮点
+
+| 包 | 特色 | 安装 |
+|---|---|---|
+| **[pi-task-orientation](packages/pi-task-orientation/)** | 每个请求前强制**两步骤定向**：① 技能评估——模型必须对照技能列表给出匹配项（可多选）或 `["none"]`，且必须附具体理由；② AGENTS.md 规则审查——逐条检查全部规则，始终适用的直接执行，条件式规则不触发时**必须报备跳过项与原因**。把「希望模型自觉」变成「强制、可审计、零成本默认」。 | `pi install npm:pi-task-orientation` |
+| **[pi-inline-skills-and-prompts](packages/pi-inline-skills-and-prompts/)** | 消息正文里敲 `$` 即可内联补全技能/提示词命令，选中后自动把整行改写成 `/命令 内容`——写消息写到一半想召唤技能，不用切行、不用切模式。 | `pi install npm:pi-inline-skills-and-prompts` |
+
+## 🎯 为什么值得用
+
+业界普遍承认：规则文件只是 context，**没有强制机制就没有遵循**。这两个包正是这条原则的工程实现：
+
+- **零重复注入**：技能列表与 AGENTS.md 内容都留在系统提示里，扩展只教模型「怎么用」，从不把同一内容塞两遍。
+- **决策可审计**：技能选择、规则跳过、理由全部落在工具调用参数里，写入会话历史——事后可查，无法表演。
+- **成本感知**：无技能匹配 → `["none"]` + 一行理由；无规则跳过 → 空数组。正常请求零额外开销，不拖慢、不膨胀。
+- **不赌模型自觉**：该强制的地方（先评估再干活）用 harness 门控兜底，该判断的地方（选什么技能、哪些规则适用）留给模型——在「强制」和「自主」之间找到平衡。
+- **真实环境验证**：每个设计决策都经过受控实验与真实实例对比（含思维链语言、规则遵循率、门控敷衍率的实测数据）。
 
 ## 目录
 
-| 包 | 说明 | 安装 |
-|---|---|---|
-| ~~[pi-mandatory-skill-resolution](packages/pi-mandatory-skill-resolution/)~~ | 已被 pi-task-orientation 取代（旧版单技能评估，无 AGENTS.md 规则分析） | — |
-| [pi-task-orientation](packages/pi-task-orientation/) | 每轮任务开始前两步定向：强制技能评估（多选/理由）+ 逐条分析 AGENTS.md 规则（跳过项+原因传回工具参数）。取代 pi-mandatory-skill-resolution | `pi install npm:pi-task-orientation` |
-| [pi-inline-skills-and-prompts](packages/pi-inline-skills-and-prompts/) | 消息正文内联 `$` 补全并插入 skill / prompt 命令，不用切到 `/` 命令模式 | `pi install npm:pi-inline-skills-and-prompts` |
+| 包 | 说明 |
+|---|---|
+| [pi-task-orientation](packages/pi-task-orientation/) | 每轮任务两步定向：技能评估 + AGENTS.md 规则审查（取代 pi-mandatory-skill-resolution） |
+| [pi-inline-skills-and-prompts](packages/pi-inline-skills-and-prompts/) | 消息正文 `$` 内联补全技能/提示词命令 |
+
+## 安装
+
+```bash
+pi install npm:pi-task-orientation
+pi install npm:pi-inline-skills-and-prompts
+```
 
 ## 开发
 
 ```bash
 # 类型检查某个子包
-cd packages/pi-mandatory-skill-resolution
-npx tsc --noEmit --strict --esModuleInterop --skipLibCheck \
+cd packages/pi-task-orientation
+npx -y -p typescript tsc --noEmit --strict --esModuleInterop --skipLibCheck \
   --module nodenext --moduleResolution nodenext --target es2022 \
-  extensions/mandatory-skill-resolution.ts
+  extensions/task-orientation.ts
 
 # 本地安装验证
 pi install ./packages/pi-task-orientation
 ```
 
-## 发布
-
-每个子包独立 `npm publish`（包名需唯一）。发布后自动出现在 [pi.dev/packages](https://pi.dev/packages)（要求 `keywords` 含 `pi-package`，本仓库子包均已声明）。
-
-```bash
-cd packages/<tool>
-npm login
-npm publish --access public
-```
-
 ## License
 
-MIT（见各子包 LICENSE）
+MIT
