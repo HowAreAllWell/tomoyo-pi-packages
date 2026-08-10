@@ -1,0 +1,33 @@
+{
+  "name": "pi-vision-bridge-tomoyo",
+  "version": "0.1.0",
+  "description": "Vision bridge for text-only models (e.g. DeepSeek V4 Flash): images pasted into the chat and screenshots are described by a cheap vision model (MiniMax M3 via opencode.go) and fed to the main model as text. Registers a describe_image tool for on-demand screenshot understanding. Capability-aware: bypasses itself when the main model supports images.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "vision",
+    "multimodal",
+    "image-analysis",
+    "describe-image",
+    "deepseek",
+    "screenshot",
+    "ocr"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "extensions/index.ts",
+  "files": [
+    "extensions",
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  }
+}
