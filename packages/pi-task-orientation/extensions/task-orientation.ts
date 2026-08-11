@@ -627,25 +627,22 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 		// 只保留最近一条本扩展的定向消息（CT_PLAN/CT_CONTINUE/CT_CHECKPOINT/CT_ENDCHECK）
 		const ourTypes = new Set([CT_PLAN, CT_CONTINUE, CT_CHECKPOINT, CT_ENDCHECK]);
 		let lastIdx = -1;
+		let last: (typeof messages)[number] | undefined = undefined;
 		for (let i = 0; i < messages.length; i++) {
 			const m = messages[i];
-			if (m.role === "custom" && m.customType !== undefined && ourTypes.has(m.customType)) lastIdx = i;
+			if (m && m.role === "custom" && m.customType !== undefined && ourTypes.has(m.customType)) {
+				lastIdx = i;
+				last = m;
+			}
 		}
 		if (lastIdx !== -1) {
 			messages = messages.filter(
-				(m, i) => !(i !== lastIdx && m.role === "custom" && m.customType !== undefined && ourTypes.has(m.customType)),
+				(m, i) => !(m && i !== lastIdx && m.role === "custom" && m.customType !== undefined && ourTypes.has(m.customType)),
 			);
-		}
-		// end-check 投递前重新校验：若状态已全部完成/无活跃任务，丢弃该消息（防止过期状态快照在 agent_end 误触发）
-		if (lastIdx !== -1) {
-			const last = messages[lastIdx];
-			if (
-				last.role === "custom" &&
-				last.customType === CT_ENDCHECK &&
-				(activeTodo === null || isTaskComplete(activeTodo))
-			) {
+			// end-check 投递前重新校验：若状态已全部完成/无活跃任务，丢弃该消息（防止过期快照误触发；按值扫描，不用过期索引）
+			if (last && last.role === "custom" && last.customType === CT_ENDCHECK && (activeTodo === null || isTaskComplete(activeTodo))) {
 				messages = messages.filter(
-					(m, i) => !(i === lastIdx && m.role === "custom" && m.customType === CT_ENDCHECK),
+					(m) => !(m && m.role === "custom" && m.customType === CT_ENDCHECK),
 				);
 			}
 		}

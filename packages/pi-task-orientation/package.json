@@ -1,6 +1,6 @@
 {
   "name": "pi-task-orientation",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Continuous task orientation for weak models: plan() is a gated mandatory first step (skills + AGENTS.md rules + execution checklist), task_todo() keeps the checklist live, turn-end checkpoints re-orient mid-task, and an agent-end check catches unfinished or bypassed plans.",
   "keywords": [
     "pi-package",
