@@ -98,6 +98,7 @@ const PLAN_INSTRUCTION = [
 	"- reason: one sentence justifying your choice.",
 	"- skipped_rules: AGENTS.md conditional rules this request does NOT trigger, each with a reason; empty array if none.",
 	"- todos: the execution checklist derived from the user request, the chosen skills, and the AGENTS.md rules.",
+	"- For trivial requests (e.g. a greeting or a one-line question), todos may be empty or a single short item — do not over-plan.",
 	"",
 	"AGENTS.md rules are BINDING. Lack of forceful wording (e.g. no \"must\") does not downgrade a rule to a suggestion. Follow every rule except clearly conditional ones; when a conditional rule becomes triggered during execution (e.g. after modifying files), apply it immediately or add it to the todos.",
 	"",
@@ -400,9 +401,9 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 		name: TODO_TOOL,
 		label: "Update Task Todo",
 		description:
-			"Update the current task's todo list. " +
-			"Actions: update (mark an item done/blocked/cancelled/pending/in_progress), add (append a new pending item), load_skill (load a skill's full instructions). " +
-			"At most one item may be in_progress at a time.",
+				"Update the current task's todo list. " +
+				"Actions: update (mark one or more items done/blocked/cancelled/pending/in_progress — pass updates[] for an atomic batch), add (append a new pending item), load_skill (load a skill's full instructions). " +
+				"At most one item may be in_progress at a time; batch updates are validated together and applied atomically (all or nothing).",
 		promptSnippet: "task_todo(action, ...) — update the current task's todo list",
 		parameters: Type.Object({
 			action: Type.Union([
@@ -421,6 +422,21 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 					Type.Literal("blocked"),
 					Type.Literal("cancelled"),
 				]),
+			),
+			updates: Type.Optional(
+				Type.Array(
+					Type.Object({
+						id: Type.Integer({ description: "Todo id to update." }),
+						status: Type.Union([
+							Type.Literal("pending"),
+							Type.Literal("in_progress"),
+							Type.Literal("done"),
+							Type.Literal("blocked"),
+							Type.Literal("cancelled"),
+						]),
+					}),
+					{ description: "Batch update entries for action=update (alternative to a single id+status): all are validated together and applied atomically." },
+				),
 			),
 			title: Type.Optional(Type.String({ description: "New todo title (required for action=add)." })),
 			skills: Type.Optional(
@@ -446,42 +462,35 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 				};
 			}
 
-			const list: Todo[] = activeTodo.map((t) => ({ ...t }));
+			let list: Todo[] = activeTodo.map((t) => ({ ...t }));
 
 			if (params.action === "update") {
-				if (params.id === undefined || params.status === undefined) {
+				const targets: Array<{ id: number; status: TodoStatus }> =
+					Array.isArray(params.updates) && params.updates.length > 0
+						? params.updates.map((u) => ({ id: u.id, status: u.status }))
+						: params.id !== undefined && params.status !== undefined
+							? [{ id: params.id, status: params.status }]
+							: [];
+				if (targets.length === 0) {
 					return {
 						content: [
 							{
 								type: "text" as const,
-								text: 'task_todo(action="update") requires both "id" and "status".',
+								text: 'task_todo(action="update") requires "id" + "status" or a non-empty "updates" array.',
 							},
 						],
 						details: {},
 						isError: true,
 					};
 				}
-				const item = list.find((t) => t.id === params.id);
-				if (!item) {
-					return {
-						content: [
-							{
-								type: "text" as const,
-								text: `Todo #${params.id} not found. Current todos:\n${formatTodoList(list)}`,
-							},
-						],
-						details: {},
-						isError: true,
-					};
-				}
-				if (params.status === "in_progress") {
-					const already = list.find((t) => t.status === "in_progress" && t.id !== params.id);
-					if (already) {
+				// 原子批量：先校验所有 id 存在，再试算最终状态并校验不变式，全部通过才一次性提交。
+				for (const t of targets) {
+					if (!list.some((x) => x.id === t.id)) {
 						return {
 							content: [
 								{
 									type: "text" as const,
-									text: `Todo #${already.id} is already in_progress. Mark it done/blocked/cancelled first, then re-call task_todo.`,
+									text: `Todo #${t.id} not found. Current todos:\n${formatTodoList(list)}`,
 								},
 							],
 							details: {},
@@ -489,7 +498,25 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 						};
 					}
 				}
-				item.status = params.status;
+				const applied = list.map((t) => ({ ...t }));
+				for (const t of targets) {
+					const item = applied.find((x) => x.id === t.id);
+					if (item) item.status = t.status;
+				}
+				const inProgress = applied.filter((t) => t.status === "in_progress");
+				if (inProgress.length > 1) {
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `Invalid update: at most one todo can be "in_progress" (would be ${inProgress.length}: #${inProgress.map((t) => t.id).join(", #")}). Mark the others done/blocked/cancelled first, then re-call task_todo.`,
+							},
+						],
+						details: {},
+						isError: true,
+					};
+				}
+				list = applied;
 			} else if (params.action === "add") {
 				if (!params.title) {
 					return {
