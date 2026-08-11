@@ -1,6 +1,6 @@
 # pi-task-orientation
 
-A pi extension that makes every request start with a **two-step orientation**, replacing the old `pi-mandatory-skill-resolution`.
+A pi extension that turns "orientation" from a one-shot startup ritual into a **continuous task loop**, built for weak reasoning models (e.g. deepseek-v4-flash) that ignore soft instructions. **v2** replaces the v1 `task_orientation` tool with a gated `plan()` + a live `task_todo()` list, mid-task checkpoints, and an agent-end safety check.
 
 ## Why
 
@@ -8,47 +8,111 @@ Two chronic problems in agentic coding:
 - **Skills get skipped**: with progressive disclosure, the system prompt only lists skill names + one-line descriptions. A model that never decides to `read` a SKILL.md effectively ignores the skill system.
 - **AGENTS.md rules get silently ignored**: the full AGENTS.md is injected into the system prompt, but as *reference context* — nothing forces the model to analyze it, so "always-applicable" rules are followed inconsistently and "conditional" rules (e.g. worklog updates) are dropped without anyone noticing.
 
-This extension turns both from "hopeful behavior" into a **mandatory, auditable routine**.
-
-## Known issues with deepseek-v4-flash (why this exists)
-
-If you run pi with **deepseek-v4-flash** (or a similar reasoning model), you have probably hit the exact problems this extension is built for. All of the following were measured against deepseek-v4-flash in controlled experiments:
-
-1. **Thinking (chain-of-thought) defaults to English.** Even when AGENTS.md says “think in Chinese”, deepseek-v4-flash reasons in English (~71% of thinking blocks in our session). A *descriptive* rule in AGENTS.md is **not enough**. It only works when rewritten as a strong imperative with examples — “Thinking must be in Simplified Chinese, do not reason in English” — verified 3/3 times. Keep such rules in the always-applicable part of AGENTS.md and phrase them as commands, not descriptions.
-2. **Models circumvent skill gates.** If you gate all tools behind a “call X first” tool, the model learns to call it with a throwaway value (`"none"`) to unlock everything — without ever evaluating. We saw one session with 18 gate calls, all `"none"`, zero skills loaded. That is why `task_orientation` requires a concrete `reason`, and why choosing a skill auto-loads its full SKILL.md (no `read` needed, nothing to skip).
-3. **Conditional rules are silently dropped.** Rules like “update worklog when files changed” get skipped with no trace. That is why Step 2 forces the model to report every skipped conditional rule via `skipped_rules` with a reason.
-4. **Instruction following is unstable.** Same task, same model, different runs pick different (sometimes wrong) skills and occasionally even switch output language. Never trust a single observation; the mandatory + auditable design exists because “hoping the model behaves” is not reliable.
-5. **Self-reported compliance is not trustworthy.** The model can claim it followed a rule (“I thought in Chinese 90% of the time”) while the actual session transcript shows otherwise. Audit the tool-call parameters (`reason`, `skipped_rules`), not the model’s prose.
-
-These are model-behavior observations, not bugs in pi — and they motivate every design decision in this extension.
+v1 forced a *one-shot* orientation at the start of every request. It worked, but every new message re-armed the gate, and the gate could be gamed with `["none"]`. v2 fixes both: the gate now fires **once per task**, and the unlock action *is* the deliverable (a real plan — there is no cheap "none" escape).
 
 ## How it works
 
-At every new request (`before_agent_start`), the model receives two steps and must call the `task_orientation` tool before any other tool (gated):
+```
+┌─ Instruction  before_agent_start   new task → arm gate + inject plan() directive
+│                                     continuation → no gate + inject continue nudge
+├─ Enforcement  tool_call            block every tool until plan() is called
+├─ Delivery     plan()               skills + AGENTS.md analysis + execution checklist
+├─ Execution    (free)               task_todo() keeps the checklist live; load_skill mid-task
+├─ Observation  turn_end + context   compact checkpoint: status line + update/AGENTS.md nudge
+└─ Safety       agent_end            if todos unfinished or plan never called → one final-check round
+```
 
-**Step 1 · Skill assessment**
-The model checks the `<available_skills>` list and passes ALL matching skill names — or `["none"]`. Each chosen skill's full SKILL.md is loaded into context immediately (no `read` needed, cannot be skipped). A required `reason` prevents mechanical "none" answers.
+### The state machine (gate = once per task, not per message)
 
-**Step 2 · Project rule analysis** (only injected when the project has an AGENTS.md)
-The model must check EVERY rule in AGENTS.md one by one, apply always-applicable rules, and — for conditional rules whose condition this request does not meet — pass them to the `skipped_rules` parameter with a concrete reason. Nothing is silently dropped.
+```
+before_agent_start:
+  activeTodo == null or all terminated → NEW TASK: arm gate, inject plan() directive
+  otherwise                             → CONTINUATION: no gate, inject continue nudge
+```
 
-The tool accepts:
+- `activeTodo` lives in the extension's state and in every `plan()`/`task_todo()` tool-result `details` (branch-safe; survives `/fork`).
+- On `session_start` / `session_tree` / `session_compact` the state is rebuilt from session history, so a mid-task `/compact` or `/reload` does not lose the checklist.
+- On task completion the final list is archived via `appendEntry` (audit trail).
+
+### plan() — the gated mandatory first step
+
+Called before any other tool on a fresh task. Three deliverables in one call:
 
 ```ts
-task_orientation({
-  skills: ["code-review"],          // all matching skills, or ["none"]
-  reason: "covers the review part", // concrete justification
-  skipped_rules: [                  // conditional AGENTS.md rules not triggered
-    { rule: "worklog update", reason: "no files changed" }
-  ],                                // empty array if nothing skipped
+plan({
+  skills: ["code-review"],        // matching skills, or [] — /skill: loaded ones are auto-skipped
+  reason: "covers the review part",
+  skipped_rules: [{ rule: "worklog update", reason: "no files changed yet" }], // or []
+  todos: [
+    { title: "read the diff", status: "in_progress" }, // at most one in_progress
+    { title: "review per skill", status: "pending" },
+  ],
 })
 ```
 
-Design principles:
-- **Zero duplication**: the skill list stays in the system prompt (`<available_skills>`), and AGENTS.md stays in `<project_context>` — the extension only teaches *how to use* them, never re-injects their content.
-- **Auditable decisions**: both "which skills" and "which conditional rules were skipped and why" are recorded in the tool call (session history), not just in free-form output.
-- **Cost-aware**: no skills apply → `["none"]` + one-line reason; nothing skipped → empty array. No output bloat for well-behaved requests.
-- **Multi-skill**: a request may match several skills; all are loaded.
+- **Skills**: chosen SKILL.md files are injected in full (no `read` needed, cannot be skipped). Already-loaded skills (manual `/skill:name`) are never re-injected.
+- **AGENTS.md rules are BINDING**: lack of forceful wording does not downgrade a rule. Conditional rules are recorded via `skipped_rules` and re-checked at checkpoints when they become triggered (e.g. after modifying files).
+- **Todos** must be a real execution checklist — there is no throwaway value like `"none"`; the cheapest way to unlock the gate is to produce a genuine plan.
+
+### task_todo() — live updates during execution
+
+```ts
+task_todo({ action: "update", id: 3, status: "done" })
+task_todo({ action: "add", title: "also fix the README" })
+task_todo({ action: "load_skill", skills: ["diagnosing-bugs"] })
+```
+
+Enforces one invariant: **at most one item `in_progress`** (the model must close the current item before opening another). `load_skill` injects a new skill's full instructions mid-task without re-arming the gate.
+
+### Checkpoints (turn_end → context)
+
+After every execution turn, a compact status line is injected before the next LLM call:
+
+```
+[checkpoint] Done: 2 · In progress: #3 "implement login API" · Pending: 2 (next: #4 "write tests")
+- Something completed or changed? Call task_todo to update it (or load_skill for a new skill).
+- Did an AGENTS.md conditional rule trigger? Apply it now or add it to the todos.
+- Otherwise just continue — no action needed.
+```
+
+Old orientation messages are pruned from context so only the latest stays; checkpoints are injected per-LLM-call and do not pollute session history.
+
+### agent_end safety check (once, conditional)
+
+Fires only when something is wrong, and only once:
+- **todos unfinished** → one final-check round: mark done / blocked / cancelled, ensure triggered AGENTS.md conditional rules are applied *or already in the todos*, then give the final answer.
+- **gate armed but plan() never called** (pure-text bypass) → one round asking for `plan()` (or an explicit trivial-task answer).
+
+A clean task pays **zero** extra rounds. The end check is one-shot (`endCheckDone`), so a continuation round that reaches `agent_end` again passes through.
+
+## Known issues with deepseek-v4-flash (why this exists)
+
+Measured against deepseek-v4-flash in controlled experiments:
+
+1. **Thinking (chain-of-thought) defaults to English.** Even when AGENTS.md says "think in Chinese", deepseek-v4-flash reasons in English (~71% of thinking blocks in our session). A *descriptive* rule is **not enough** — it only works as a strong imperative with examples. Phrase such rules as commands, and the BINDING wording in the plan() directive makes ignoring them a conscious act.
+2. **Models circumvent soft gates.** If a gate has a cheap legal exit (e.g. `task_orientation(["none"])`), the model learns to take it every time — one session had 18 gate calls, all `"none"`, zero skills loaded. v2's `plan()` has **no** cheap exit: the mandatory `reason`, `skipped_rules`, and a real `todos` list make the unlock action equal to the deliverable.
+3. **Soft reminders get dropped.** That is why the start is a hard gate, the end is a hard check, and the middle is *frequent* (every turn) rather than one-shot — a reminder the model sees every turn is much harder to ignore than a directive it saw once.
+
+## Design principles
+
+- **Gate = once per task**: only a fresh task (or a finished one) re-arms the gate; "continue" messages do not.
+- **Unlock = deliverable**: the cheapest legal plan() is a genuine plan, not a token call.
+- **State owned by the harness**: `activeTodo` lives in extension state and tool-result `details` — the model edits via tools, the harness persists, echoes, and reconstructs across `/compact` / `/reload` / `/fork`.
+- **Hard at both ends, free in the middle**: start gate + end check are the two mechanically-detectable anchors; in between, no per-tool interference, only per-turn nudges.
+- **Auditable**: skill choices, AGENTS.md `skipped_rules`, and the archived todo list are all recorded in session history.
+- **Generic, not special-cased**: the extension never names specific skills or rules (no hardcoded "diagnosing-bugs" or "worklog"); everything is derived from `<available_skills>` and the project's AGENTS.md.
+
+## Manual skills (`/skill:name`)
+
+- **Visible skill**: content is already in the user message; `plan()` skips re-injection automatically, and the model may still add *other* matching skills.
+- **Invisible skill** (`disable-model-invocation`): also already in context via `/skill:` expansion; the gate only requires one `plan()` call (with `[]` or other skills), then execution is free. No extra friction beyond that single orientation call.
+
+## Known limitations (v1)
+
+- A model can still produce a hollow `todos` list to open the gate. The counterweights are the mandatory `reason`/`skipped_rules`, the checkpoint echo (a fake plan is visibly wrong), and the audit trail. A "confirm the plan" approval step is a planned v3 enhancement.
+- Re-planning on continuation messages is model-voluntary (no gate) — by design, to keep the gate rare.
+- "Todos all terminated but a conditional rule (e.g. worklog) was forgotten" is not mechanically catchable; it relies on the BINDING wording and checkpoint nudges.
+- In the armed window a weak model may still try 1–2 other tools before calling `plan()`; each attempt is one blocked round-trip.
 
 ## Install
 
@@ -56,22 +120,25 @@ Design principles:
 pi install npm:pi-task-orientation
 ```
 
-## Replacing pi-mandatory-skill-resolution
+or copy `extensions/task-orientation.ts` into `~/.pi/agent/extensions/` and `/reload`.
 
-`pi-task-orientation` supersedes `pi-mandatory-skill-resolution`. If you previously installed the old package:
+## Migration from v1
 
-1. Remove `pi-mandatory-skill-resolution` from your settings (or remove its file from `~/.pi/agent/extensions/`).
-2. Install `pi-task-orientation`.
-3. `/reload`.
+`pi-task-orientation@2` supersedes `@1`. The `task_orientation` tool is gone; the system prompt directive now points to `plan()` / `task_todo()`.
 
-Both register a gating tool; running them together causes a conflict.
+1. Update to `2.0.0` (`pi install npm:pi-task-orientation@2` or replace the local file).
+2. `/reload`.
+3. Existing sessions are compatible — v2 reconstructs task state from session history.
 
 ## Development
 
 ```bash
-npx -y -p typescript tsc --noEmit --strict --esModuleInterop --skipLibCheck \
-  --module nodenext --moduleResolution nodenext --target es2022 \
-  extensions/task-orientation.ts
+# strict type check (uses types-shim.d.ts + tsconfig.check.json for local resolution)
+npx -y -p typescript tsc -p tsconfig.check.json
+
+# syntax/transpile check (what the pi runtime does)
+npx -y esbuild extensions/task-orientation.ts --bundle --format=esm --platform=node \
+  --external:@earendil-works/* --external:typebox --outfile=/tmp/to-check.js
 ```
 
 ## License
@@ -82,31 +149,17 @@ MIT
 
 ## 中文说明
 
-**这是什么**：一个 pi 扩展，让每个请求在开始前强制完成**两步骤定向**，取代旧的 `pi-mandatory-skill-resolution`。
+**这是什么**：一个让"定向"从一次性仪式变成**持续任务循环**的 pi 扩展。v2 用门控的 `plan()`（技能 + AGENTS.md 分析 + 执行清单三合一）取代 v1 的 `task_orientation`，新增 `task_todo()` 执行期更新、turn-end 检查点、agent-end 收尾兜底。
 
-**解决的两个问题**：
-- **技能被跳过**：渐进式披露下，系统提示里只有技能名+一行描述，模型不主动 `read` SKILL.md 就等于无视技能系统。
-- **AGENTS.md 规则被默默忽略**：AGENTS.md 全文虽然注入在系统提示里，但只是"参考上下文"——没有机制强制模型分析它，导致"始终适用"规则执行不一致、"条件式"规则（如 worklog 更新）被丢弃也无人察觉。
+**核心改进**：
+- **门控从"每条消息"降到"每个任务"**：只有新任务（或任务完成后的下一条消息）才武装门控；"继续"类消息不武装，直接延续。
+- **解锁 = 交付物**：`plan()` 没有 `["none"]` 这种廉价出口——最便宜的解锁就是写出一份真实清单。堵死了 v1 README 记录的"18 次全 none"绕过。
+- **两端硬、中间自由**：起点 plan 硬门控 + 终点条件硬收尾（todo 未终结或 plan 从未调用时，只续跑一轮）；执行期不干预工具，只靠每 turn 的紧凑检查点软提醒。
+- **状态 harness 持有**：清单存在扩展状态与工具结果 `details`，跨 `/compact` `/reload` `/fork` 可重建；任务完成时 `appendEntry` 存档审计。
+- **通用不特化**：不点名任何具体技能或规则（不硬编码"diagnosing-bugs"、"worklog"），一切从 `<available_skills>` 与项目 AGENTS.md 动态推导。
 
-**工作方式**（每轮 `before_agent_start` 注入，所有其他工具被门控直到调用 `task_orientation`）：
+**手动 `/skill:name`**：可见技能与不可见技能都因 `/skill:` 展开而全文已在上下文，`plan()` 自动跳过重复注入；不可见技能也只多付一次 plan 调用的代价即可自由执行。
 
-- **第 1 步 · 技能评估**：对照 `<available_skills>` 列表，传入全部匹配的技能名（可多个），或 `["none"]`。选中的技能 SKILL.md 全文立即注入上下文（无需 read、无法跳过）。必填 `reason` 防机械敷衍。
-- **第 2 步 · 项目规则分析**（仅项目有 AGENTS.md 时注入）：逐条检查 AGENTS.md 全部规则，始终适用的直接应用；本轮不触发条件式规则时，把"跳过项 + 具体原因"传入 `skipped_rules` 参数——不默默丢弃任何规则。
+**已知限制（v1）**：空洞 todo 仍能解锁（靠 reason/skipped_rules 必填、检查点回显反噬与审计兜底，人工"确认计划"步骤列入 v3）；延续模式的重排是软约束；"todo 全终结但漏了条件规则"机械上抓不到，靠 BINDING 措辞与检查点提醒。
 
-**deepseek-v4-flash 踩坑记录**（本扩展的所有设计动机，均来自受控实验实测）：
-
-1. **思维链默认英文**：AGENTS.md 里写“思维链用中文”（陈述式）几乎无效（实测思维链约 71% 为英文）；只有写成祈使式强约束+正反例（“思维链必须使用简体中文，禁止用英文思考”）才有效（3/3 复现）。请把这类规则放到 AGENTS.md 的“始终适用”部分，并用命令式而非描述式。
-2. **技能门控会被敷衍**：强制“先调 X 工具”时，模型会每轮传 `"none"` 解锁全部工具、实际不评估（实测一次会话 18 次调用全为 none、0 个技能加载）。所以本扩展要求必填 `reason`，且选中即自动加载 SKILL.md 全文（无需 read、无法跳过）。
-3. **条件式规则被静默丢弃**：“文件改动则更新 worklog”这类规则会被跳过且无痕迹。所以第 2 步强制模型把每个跳过的条件式规则通过 `skipped_rules` 报备并说明原因。
-4. **指令遵循不稳定**：同一任务同一模型，不同运行会选错技能、甚至偶尔切换输出语言。不要相信单次观察；“强制 + 可审计”的设计就是因为它不可靠。
-5. **自我报告不可信**：模型会声称“思维链 90% 用了中文”，但会话记录显示实际全英文。请以工具调用参数（`reason`、`skipped_rules`）为准，不要以模型叙述为准。
-
-这些是模型行为观察，不是 pi 的 bug。
-
-**设计原则**：零重复（技能列表与 AGENTS.md 内容都留在系统提示，扩展只教"怎么用"）；决策可审计（技能选择与跳过规则都在工具调用里，写入会话历史）；成本可控（无匹配 → `["none"]` + 一行理由；无跳过 → 空数组）；支持多技能。
-
-**安装**：`pi install npm:pi-task-orientation`
-
-**取代旧扩展**：`pi-task-orientation` 是 `pi-mandatory-skill-resolution` 的继任者。移除旧包后安装新包，`/reload`。两者不能同时运行（都会注册门控工具，冲突）。
-
-**License**：MIT
+**从 v1 迁移**：工具 `task_orientation` 已移除，升级到 2.0.0 后 `/reload` 即可；v2 会从会话历史重建任务状态，旧会话兼容。

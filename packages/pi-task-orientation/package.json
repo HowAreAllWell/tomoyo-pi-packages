@@ -1,17 +1,24 @@
 {
   "name": "pi-task-orientation",
-  "version": "0.1.1",
-  "description": "Every request begins with a two-step orientation: (1) the model must assess available skills and load matching ones (or justify \"none\"), (2) it must check every AGENTS.md rule, apply always-applicable ones, and report skipped conditional rules with reasons. Replaces pi-mandatory-skill-resolution.",
+  "version": "2.0.0",
+  "description": "Continuous task orientation for weak models: plan() is a gated mandatory first step (skills + AGENTS.md rules + execution checklist), task_todo() keeps the checklist live, turn-end checkpoints re-orient mid-task, and an agent-end check catches unfinished or bypassed plans.",
   "keywords": [
     "pi-package",
     "pi-extension",
     "skills",
     "rules",
+    "todo",
+    "plan",
     "agent"
   ],
   "license": "MIT",
   "type": "module",
   "main": "extensions/task-orientation.ts",
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
