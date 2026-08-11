@@ -241,6 +241,7 @@ function buildEndCheckText(needsPlan: boolean, hasUnfinished: boolean): string {
 			: "[final check] Your todos still have unfinished items. Do NOT start new work — only finalize:",
 		"- mark done items as done, items waiting on the user or blocked as blocked, unnecessary items as cancelled;",
 		"- ensure every triggered AGENTS.md conditional rule is either applied or already present in your todos;",
+		"If everything is already done or waiting on you, just confirm and give your final answer.",
 		"then give your final answer.",
 	];
 	return lines.join("\n");
@@ -634,6 +635,19 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 			messages = messages.filter(
 				(m, i) => !(i !== lastIdx && m.role === "custom" && m.customType !== undefined && ourTypes.has(m.customType)),
 			);
+		}
+		// end-check 投递前重新校验：若状态已全部完成/无活跃任务，丢弃该消息（防止过期状态快照在 agent_end 误触发）
+		if (lastIdx !== -1) {
+			const last = messages[lastIdx];
+			if (
+				last.role === "custom" &&
+				last.customType === CT_ENDCHECK &&
+				(activeTodo === null || isTaskComplete(activeTodo))
+			) {
+				messages = messages.filter(
+					(m, i) => !(i === lastIdx && m.role === "custom" && m.customType === CT_ENDCHECK),
+				);
+			}
 		}
 
 		// 注入检查点（仅进本次 LLM payload，不落会话历史）
