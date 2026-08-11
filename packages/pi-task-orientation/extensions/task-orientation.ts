@@ -153,8 +153,9 @@ function findManualSkills(prompt: string): string[] {
 	return names;
 }
 
-function isAllTerminated(list: Todo[]): boolean {
-	return list.every((t) => t.status === "done" || t.status === "blocked" || t.status === "cancelled");
+function isTaskComplete(list: Todo[]): boolean {
+	// 任务是否真正结束：仅 done/cancelled。blocked=暂停（等用户/被阻塞），状态保留供延续。
+	return list.every((t) => t.status === "done" || t.status === "cancelled");
 }
 
 function statusCounts(list: Todo[]): { done: number; inProgress: Todo[]; pending: Todo[] } {
@@ -246,7 +247,7 @@ function buildEndCheckText(needsPlan: boolean, hasUnfinished: boolean): string {
 
 /** 任务完成收尾：全部终结 → 存档 + 清空（下条消息进入新任务模式）；否则保留（延续）。 */
 function applyCompletion(appendArchive: (todos: Todo[]) => void): void {
-	if (activeTodo !== null && isAllTerminated(activeTodo)) {
+	if (activeTodo !== null && isTaskComplete(activeTodo)) {
 		appendArchive(activeTodo);
 		activeTodo = null;
 	}
@@ -564,7 +565,7 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 		const hasContent = skillPaths.size > 0 || hasAgentsMd;
 
 		// 新任务模式（无活跃任务或已全部终结）
-		if (activeTodo === null || isAllTerminated(activeTodo)) {
+		if (activeTodo === null || isTaskComplete(activeTodo)) {
 			if (!hasContent) return undefined; // 无技能且无 AGENTS.md：无可强制内容，纯自由
 			gateArmed = true;
 			return {
@@ -635,7 +636,7 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		const needsPlan = gateArmed && !planDone;
-		const hasUnfinished = activeTodo !== null && !isAllTerminated(activeTodo);
+		const hasUnfinished = activeTodo !== null && !isTaskComplete(activeTodo);
 		if (needsPlan || hasUnfinished) {
 			endCheckDone = true;
 			pi.sendMessage(
