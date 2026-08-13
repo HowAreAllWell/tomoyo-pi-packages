@@ -48,7 +48,6 @@ const TODO_TOOL = "task_todo";
 const CT_PLAN = "task-orientation-plan";
 const CT_CONTINUE = "task-orientation-continue";
 const CT_CHECKPOINT = "task-orientation-checkpoint";
-const CT_ENDCHECK = "task-orientation-endcheck";
 const CT_ARCHIVE = "todo-archive";
 
 // ---------------------------------------------------------------------------
@@ -79,8 +78,6 @@ let nextTodoId = 1;
 let gateArmed = false;
 /** 本任务是否已调用过 plan（终点兜底"纯文本绕过"判定） */
 let planDone = false;
-/** 终点检查是否已触发过（保证只续跑一次） */
-let endCheckDone = false;
 /** 本任务已注入/已手动加载的技能（防重复注入） */
 let loadedSkills = new Set<string>();
 /** turn_end 已排期、待 context 注入的检查点 */
@@ -91,22 +88,29 @@ let checkpointPending = false;
 // ---------------------------------------------------------------------------
 
 const PLAN_INSTRUCTION = [
-	"## Task orientation (do not skip — applies to every new request)",
+	"Call plan() before any action — use it to combine the user's message, the AGENTS.md rules, and the visible skills to plan this task and form the todo items.",
 	"",
-	"Call plan() before any other tool. plan() requires:",
-	"- skills: all matching skills from <available_skills>; [] if none. Skills already loaded via /skill: are handled automatically — do not re-list them.",
-	"- reason: one sentence justifying your choice.",
-	"- skipped_rules: AGENTS.md conditional rules this request does NOT trigger, each with a reason; empty array if none.",
-	"- todos: the execution checklist derived from the user request, the chosen skills, and the AGENTS.md rules.",
-	"- For trivial requests (e.g. a greeting or a one-line question), todos may be empty or a single short item — do not over-plan.",
+	"AGENTS.md rules are BINDING. Lack of forceful wording (e.g. no \"must\") does not downgrade a rule to a suggestion. Follow every rule except clearly conditional ones; if a conditional rule becomes triggered during execution, you must apply it immediately or add it to the todos.",
 	"",
-	"AGENTS.md rules are BINDING. Lack of forceful wording (e.g. no \"must\") does not downgrade a rule to a suggestion. Follow every rule except clearly conditional ones; when a conditional rule becomes triggered during execution (e.g. after modifying files), apply it immediately or add it to the todos.",
+	"You must consider the visible skills: choose the one(s) that fit this work and use them; if nothing fits, choose None and justify why.",
 	"",
-	"Execute the todos one by one, in order: mark an item in_progress before working on it, and mark it done (or blocked/cancelled) when you leave it.",
+	"Form the todo items by combining this task, the AGENTS.md rules, and the visible skills. When creating todos, mark items you cannot act on this round yet as blocked, and only mark items you can act on now as pending.",
+	"",
+	"Execute the todos one by one, in order: mark an item in_progress before working on it, and when you leave it, mark it done/blocked/cancelled as the situation warrants.",
+	"Before your final answer, reconcile every todo item — never end with any item in_progress or pending.",
 ].join("\n");
 
 const CONTINUE_NUDGE = [
-	"New message received. If it changes the task direction, update the plan first (task_todo for small changes, plan for major re-plans), then continue. Otherwise proceed directly.",
+	"AGENTS.md rules are BINDING. Lack of forceful wording (e.g. no \"must\") does not downgrade a rule to a suggestion. Follow every rule except clearly conditional ones; if a conditional rule becomes triggered during execution, you must apply it immediately or add it to the todos.",
+	"",
+	"You must consider the visible skills: choose the one(s) that fit this work and use them; if nothing fits, choose None and justify why.",
+	"",
+	"Combine the current state and this user message to update the todos (via task_todo).",
+	"",
+	"Execute the todos one by one, in order: mark an item in_progress before working on it, and when you leave it, mark it done/blocked/cancelled as the situation warrants.",
+	"Before your final answer, reconcile every todo item — never end with any item in_progress or pending.",
+	"",
+	"Then proceed with this user message.",
 ].join("\n");
 
 // ---------------------------------------------------------------------------
@@ -222,29 +226,12 @@ function buildCheckpointText(): string {
 		pending.length > 0 ? `${pending.length} (next: #${pending[0].id} "${pending[0].title}")` : "0";
 	return [
 		`[checkpoint] Done: ${done} · In progress: ${inProgressText} · Pending: ${pendingText}`,
-		"- Something completed or changed? Call task_todo to update it (or load_skill for a new skill).",
-		"- Did an AGENTS.md conditional rule trigger? Apply it now or add it to the todos.",
+		"- Check whether the todos should change per the current state; if so, update them (via task_todo).",
+		"- If a conditional AGENTS.md rule becomes triggered, you must apply it immediately or add it to the todos.",
+		"- You must consider whether a fitting available skill exists for this turn's work; if so, use it.",
+		"- About to give your final answer? Reconcile the todos first — never end with in_progress or pending.",
 		"- Otherwise just continue — no action needed.",
 	].join("\n");
-}
-
-function buildEndCheckText(needsPlan: boolean, hasUnfinished: boolean): string {
-	if (!hasUnfinished) {
-		return [
-			"[final check] plan() was never called for this request. Do NOT start new work.",
-			"If this request was trivial, answer directly. Otherwise call plan() first (skills + AGENTS.md rules + todos), then give your final answer.",
-		].join("\n");
-	}
-	const lines = [
-		hasUnfinished && needsPlan
-			? "[final check] plan() was never called and your todos still have unfinished items. Do NOT start new work — only finalize:"
-			: "[final check] Your todos still have unfinished items. Do NOT start new work — only finalize:",
-		"- mark done items as done, items waiting on the user or blocked as blocked, unnecessary items as cancelled;",
-		"- ensure every triggered AGENTS.md conditional rule is either applied or already present in your todos;",
-		"If everything is already done or waiting on you, just confirm and give your final answer.",
-		"then give your final answer.",
-	];
-	return lines.join("\n");
 }
 
 /** 任务完成收尾：全部终结 → 存档 + 清空（下条消息进入新任务模式）；否则保留（延续）。 */
@@ -296,10 +283,8 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 		name: PLAN_TOOL,
 		label: "Plan Task",
 		description:
-			"MANDATORY FIRST STEP for every new request. Call it before any other tool. " +
-			"It loads matching skills, records the AGENTS.md rule analysis, and establishes the execution checklist for this request. " +
-			"No other tool can be used until plan() has been called on a fresh task. " +
-			"May be called again later to re-plan.",
+			"MANDATORY FIRST STEP for every new task. Call it before any other tool. " +
+			"Usage: combine the user's message, the AGENTS.md rules, and the visible skills to plan this task and form the todo items.",
 		promptSnippet: "plan(skills, reason, skipped_rules, todos) — mandatory orientation: skills + AGENTS.md rules + execution checklist",
 		parameters: Type.Object({
 			skills: Type.Array(
@@ -403,7 +388,8 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 		label: "Update Task Todo",
 		description:
 				"Update the current task's todo list. " +
-				"Actions: update (mark one or more items done/blocked/cancelled/pending/in_progress — pass updates[] for an atomic batch), add (append a new pending item), load_skill (load a skill's full instructions). " +
+				"Actions: update (mark one or more items done/blocked/cancelled/pending/in_progress — pass updates[] for an atomic batch), add (append a new item with a status), load_skill (load a skill's full instructions). " +
+				"Status rules: already-finished items → done; superseded or unneeded items → cancelled; items that cannot proceed now → blocked; items no longer blocked → pending; new work → new todo items. When creating items, mark items you cannot act on this round yet as blocked, and only mark items you can act on now as pending. " +
 				"At most one item may be in_progress at a time; batch updates are validated together and applied atomically (all or nothing).",
 		promptSnippet: "task_todo(action, ...) — update the current task's todo list",
 		parameters: Type.Object({
@@ -519,20 +505,33 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 				}
 				list = applied;
 			} else if (params.action === "add") {
-				if (!params.title) {
+				if (!params.title || !params.status) {
 					return {
 						content: [
 							{
 								type: "text" as const,
-								text: 'task_todo(action="add") requires "title".',
+								text: 'task_todo(action="add") requires "title" and "status".',
 							},
 						],
 						details: {},
 						isError: true,
 					};
 				}
-				list.push({ id: nextTodoId, title: params.title, status: "pending" });
+				list.push({ id: nextTodoId, title: params.title, status: params.status });
 				nextTodoId++;
+				const inProgressAfterAdd = list.filter((t) => t.status === "in_progress");
+				if (inProgressAfterAdd.length > 1) {
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `Invalid add: at most one todo can be "in_progress" (would be ${inProgressAfterAdd.length}: #${inProgressAfterAdd.map((t) => t.id).join(", #")}). Mark the others done/blocked/cancelled first, then re-call task_todo.`,
+							},
+						],
+						details: {},
+						isError: true,
+					};
+				}
 			} else if (params.action === "load_skill") {
 				const { blocks, unknown, missing } = injectSkills(params.skills ?? []);
 				const problems: string[] = [];
@@ -570,8 +569,7 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 		return {
 			block: true,
 			reason: `You must call plan() before using "${event.toolName}". ` +
-				`Assess the <available_skills> list and the AGENTS.md rules against the current request, ` +
-				`then call plan() with the matching skills (or []), a reason, skipped_rules, and the execution checklist.`,
+				`Plan this task as described in the task orientation, then call plan() with the matching skills (or []), a reason, skipped_rules, and the execution checklist.`,
 		};
 	});
 
@@ -582,7 +580,6 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 		// 每请求重置（activeTodo 跨请求保留，驱动延续模式）
 		gateArmed = false;
 		planDone = false;
-		endCheckDone = false;
 		checkpointPending = false;
 		loadedSkills = new Set(findManualSkills(event.prompt));
 		refreshSkillIndex(event.systemPromptOptions?.skills ?? []);
@@ -624,8 +621,8 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 	pi.on("context", (event) => {
 		let messages = event.messages;
 
-		// 只保留最近一条本扩展的定向消息（CT_PLAN/CT_CONTINUE/CT_CHECKPOINT/CT_ENDCHECK）
-		const ourTypes = new Set([CT_PLAN, CT_CONTINUE, CT_CHECKPOINT, CT_ENDCHECK]);
+		// 只保留最近一条本扩展的定向消息（CT_PLAN/CT_CONTINUE/CT_CHECKPOINT）
+		const ourTypes = new Set([CT_PLAN, CT_CONTINUE, CT_CHECKPOINT]);
 		let lastIdx = -1;
 		let last: (typeof messages)[number] | undefined = undefined;
 		for (let i = 0; i < messages.length; i++) {
@@ -639,12 +636,6 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 			messages = messages.filter(
 				(m, i) => !(m && i !== lastIdx && m.role === "custom" && m.customType !== undefined && ourTypes.has(m.customType)),
 			);
-			// end-check 投递前重新校验：若状态已全部完成/无活跃任务，丢弃该消息（防止过期快照误触发；按值扫描，不用过期索引）
-			if (last && last.role === "custom" && last.customType === CT_ENDCHECK && (activeTodo === null || isTaskComplete(activeTodo))) {
-				messages = messages.filter(
-					(m) => !(m && m.role === "custom" && m.customType === CT_ENDCHECK),
-				);
-			}
 		}
 
 		// 注入检查点（仅进本次 LLM payload，不落会话历史）
@@ -666,23 +657,9 @@ export default function taskOrientationExtension(pi: ExtensionAPI): void {
 	});
 
 	// ------------------------------------------------------------------
-	// 7. agent_end：终点硬收尾（条件触发、只一次）+ 完成存档。
+	// 7. agent_end：完成存档（完整 → 归档清空 → 下轮新任务模式；否则保留列表 → 下轮延续）。
 	// ------------------------------------------------------------------
 	pi.on("agent_end", () => {
-		if (endCheckDone) {
-			applyCompletion(appendArchive);
-			return;
-		}
-		const needsPlan = gateArmed && !planDone;
-		const hasUnfinished = activeTodo !== null && !isTaskComplete(activeTodo);
-		if (needsPlan || hasUnfinished) {
-			endCheckDone = true;
-			pi.sendMessage(
-				{ customType: CT_ENDCHECK, content: buildEndCheckText(needsPlan, hasUnfinished), display: false },
-				{ deliverAs: "followUp" },
-			);
-			return;
-		}
 		applyCompletion(appendArchive);
 	});
 

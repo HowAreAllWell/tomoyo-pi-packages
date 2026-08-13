@@ -1,7 +1,8 @@
 {
   "name": "pi-task-orientation",
-  "version": "2.0.1",
-  "description": "Continuous task orientation for weak models: plan() is a gated mandatory first step (skills + AGENTS.md rules + execution checklist), task_todo() keeps the checklist live, turn-end checkpoints re-orient mid-task, and an agent-end check catches unfinished or bypassed plans.",
+  "version": "2.1.0",
+  "description": "Continuous task orientation for weak models: gated plan() turns the user's message, visible skills, and AGENTS.md rules into todo items; task_todo() keeps the list live with centralized status rules; turn-end checkpoints re-orient mid-task; the next user message continues leftover work — no forced end-of-request round.",
+  "homepage": "https://github.com/HowAreAllWell/tomoyo-pi-packages",
   "keywords": [
     "pi-package",
     "pi-extension",

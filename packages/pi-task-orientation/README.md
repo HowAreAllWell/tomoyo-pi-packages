@@ -1,6 +1,6 @@
 # pi-task-orientation
 
-A pi extension that turns "orientation" from a one-shot startup ritual into a **continuous task loop**, built for weak reasoning models (e.g. deepseek-v4-flash) that ignore soft instructions. **v2** replaces the v1 `task_orientation` tool with a gated `plan()` + a live `task_todo()` list, mid-task checkpoints, and an agent-end safety check.
+A pi extension that turns "orientation" from a one-shot startup ritual into a **continuous task loop**, built for weak reasoning models (e.g. deepseek-v4-flash) that ignore soft instructions. **v2** replaces the v1 `task_orientation` tool with a gated `plan()` + a live `task_todo()` list, mid-task checkpoints, and a next-request continuation nudge.
 
 ## Why
 
@@ -19,7 +19,7 @@ v1 forced a *one-shot* orientation at the start of every request. It worked, but
 ├─ Delivery     plan()               skills + AGENTS.md analysis + execution checklist
 ├─ Execution    (free)               task_todo() keeps the checklist live; load_skill mid-task
 ├─ Observation  turn_end + context   compact checkpoint: status line + update/AGENTS.md nudge
-└─ Safety       agent_end            if todos unfinished or plan never called → one final-check round
+└─ Continuation  agent_end            archives completed lists; leftovers continue at the next request
 ```
 
 ### The state machine (gate = once per task, not per message)
@@ -45,7 +45,7 @@ plan({
   skipped_rules: [{ rule: "worklog update", reason: "no files changed yet" }], // or []
   todos: [
     { title: "read the diff", status: "in_progress" }, // at most one in_progress
-    { title: "review per skill", status: "pending" },
+    { title: "review per skill", status: "pending" }
   ],
 })
 ```
@@ -58,11 +58,12 @@ plan({
 
 ```ts
 task_todo({ action: "update", id: 3, status: "done" })
-task_todo({ action: "add", title: "also fix the README" })
+task_todo({ action: "update", id: 3, status: "blocked" })
+task_todo({ action: "add", title: "also fix the README", status: "pending" })
 task_todo({ action: "load_skill", skills: ["diagnosing-bugs"] })
 ```
 
-Enforces one invariant: **at most one item `in_progress`** (the model must close the current item before opening another). `load_skill` injects a new skill's full instructions mid-task without re-arming the gate.
+Enforces two rules: **at most one item `in_progress`** (the model must close the current item before opening another), and **statuses follow the situation** (finished → done, superseded or unneeded → cancelled, cannot proceed now → blocked, no longer blocked → pending, new work → new items — per `task_todo`'s status rules). `load_skill` injects a new skill's full instructions mid-task without re-arming the gate.
 
 ### Checkpoints (turn_end → context)
 
@@ -77,13 +78,9 @@ After every execution turn, a compact status line is injected before the next LL
 
 Old orientation messages are pruned from context so only the latest stays; checkpoints are injected per-LLM-call and do not pollute session history.
 
-### agent_end safety check (once, conditional)
+### agent_end continuation (no end-check)
 
-Fires only when something is wrong, and only once:
-- **todos unfinished** → one final-check round: mark done / blocked / cancelled, ensure triggered AGENTS.md conditional rules are applied *or already in the todos*, then give the final answer.
-- **gate armed but plan() never called** (pure-text bypass) → one round asking for `plan()` (or an explicit trivial-task answer).
-
-A clean task pays **zero** extra rounds. The end check is one-shot (`endCheckDone`), so a continuation round that reaches `agent_end` again passes through.
+`agent_end` always calls the completion archive: a list that is fully `done`/`cancelled` is archived and cleared (next request starts a new task), otherwise the list is kept and the next user message enters **continuation mode** — the injected continuation nudge asks the model to update the todos per the current state and the new message, then continue. Leftover `in_progress`/`pending`/`blocked` items are resolved there, not by a forced end-of-request round.
 
 ## Known issues with deepseek-v4-flash (why this exists)
 
